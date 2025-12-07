@@ -9,6 +9,10 @@
 #include "freertos/semphr.h"
 #include "esp_lv_decoder.h"
 
+#if ENABLE_TOUCH
+#include "touch_bsp.h"
+#endif
+
 static const char *TAG = "lvgl_setup";
 static SemaphoreHandle_t lvgl_mux = NULL;
 
@@ -16,6 +20,10 @@ static SemaphoreHandle_t lvgl_mux = NULL;
 static void lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_map);
 static void lvgl_tick_timer_cb(void *arg);
 static void lvgl_task(void *arg);
+
+#if ENABLE_TOUCH
+static void lvgl_touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data);
+#endif
 
 // Store panel handle for flush callback
 static esp_lcd_panel_handle_t g_panel_handle = NULL;
@@ -80,7 +88,21 @@ esp_err_t lvgl_init(esp_lcd_panel_handle_t panel_handle)
     
     // Create LVGL task
     xTaskCreate(lvgl_task, "LVGL", LVGL_TASK_STACK_SIZE, NULL, LVGL_TASK_PRIORITY, NULL);
-    
+
+#if ENABLE_TOUCH
+    // Initialize touch hardware
+    touch_Init();
+    ESP_LOGI(TAG, "Touch hardware initialized");
+
+    // Register touch input device with LVGL
+    static lv_indev_drv_t indev_drv;
+    lv_indev_drv_init(&indev_drv);
+    indev_drv.type = LV_INDEV_TYPE_POINTER;
+    indev_drv.read_cb = lvgl_touch_read_cb;
+    lv_indev_drv_register(&indev_drv);
+    ESP_LOGI(TAG, "Touch input device registered with LVGL");
+#endif
+
     ESP_LOGI(TAG, "LVGL initialized successfully");
     return ESP_OK;
 }
@@ -140,23 +162,51 @@ static void lvgl_tick_timer_cb(void *arg)
 static void lvgl_task(void *arg)
 {
     ESP_LOGI(TAG, "LVGL task started");
-    
+
     uint32_t task_delay_ms = LVGL_TASK_MAX_DELAY_MS;
-    
+
     while (1) {
         // Lock mutex for LVGL operations
         if (lvgl_lock(-1)) {
             task_delay_ms = lv_timer_handler();
             lvgl_unlock();
         }
-        
+
         // Clamp delay to reasonable bounds
         if (task_delay_ms > LVGL_TASK_MAX_DELAY_MS) {
             task_delay_ms = LVGL_TASK_MAX_DELAY_MS;
         } else if (task_delay_ms < LVGL_TASK_MIN_DELAY_MS) {
             task_delay_ms = LVGL_TASK_MIN_DELAY_MS;
         }
-        
+
         vTaskDelay(pdMS_TO_TICKS(task_delay_ms));
     }
 }
+
+#if ENABLE_TOUCH
+// LVGL touch read callback
+static void lvgl_touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
+{
+    uint16_t x, y;
+
+    // Read touch coordinates from hardware
+    if (getTouch(&x, &y)) {
+        // Touch detected
+        data->state = LV_INDEV_STATE_PRESSED;
+
+        // Apply coordinate transformation based on display orientation
+#if (DISPLAY_ORIENTATION == ORIENTATION_NORMAL)
+        // Portrait mode (170x320)
+        data->point.x = x;
+        data->point.y = y;
+#elif (DISPLAY_ORIENTATION == ORIENTATION_ROTATE)
+        // Landscape mode (320x170) - swap and adjust coordinates
+        data->point.x = y;
+        data->point.y = LCD_V_RES - x;
+#endif
+    } else {
+        // No touch detected
+        data->state = LV_INDEV_STATE_RELEASED;
+    }
+}
+#endif

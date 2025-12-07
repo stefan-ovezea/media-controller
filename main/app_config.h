@@ -42,7 +42,7 @@
 
 // Feature Flags
 #define ENABLE_DISPLAY  1
-#define ENABLE_TOUCH    0
+#define ENABLE_TOUCH    1
 #define ENABLE_SDCARD   0
 
 // WiFi Configuration (dummy credentials for now)

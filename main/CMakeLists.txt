@@ -8,4 +8,4 @@ idf_component_register(SRCS "main.c"
                             "ui/ui_components.c"
                             "ui/ui_media.c"
                     INCLUDE_DIRS "." "display" "ui" "network"
-                    REQUIRES espressif__mqtt espressif__esp_lv_decoder esp_wifi nvs_flash json i2c_bsp)
+                    REQUIRES espressif__mqtt espressif__esp_lv_decoder esp_wifi nvs_flash json i2c_bsp esp_touch)
