@@ -127,37 +127,37 @@ lv_obj_t *ui_media_create(void)
     lv_obj_set_style_bg_opa(prev_btn, LV_OPA_TRANSP, LV_PART_MAIN);  // Transparent background
     lv_obj_set_style_shadow_width(prev_btn, 0, LV_PART_MAIN);
     lv_obj_set_style_border_width(prev_btn, 0, LV_PART_MAIN);
-    lv_obj_align(prev_btn, LV_ALIGN_BOTTOM_LEFT, 20, -50);
+    lv_obj_align(prev_btn, LV_ALIGN_BOTTOM_LEFT, 20, -40);
     lv_obj_add_event_cb(prev_btn, prev_event_cb, LV_EVENT_CLICKED, NULL);
-    
+
     lv_obj_t *prev_icon = lv_label_create(prev_btn);
     lv_label_set_text(prev_icon, LV_SYMBOL_PREV);
     lv_obj_set_style_text_color(prev_icon, COLOR_TEXT_PRIMARY, LV_PART_MAIN);
     lv_obj_set_style_text_font(prev_icon, &lv_font_montserrat_24, LV_PART_MAIN);
     lv_obj_center(prev_icon);
-    
+
     // Play/Pause button (icon only, larger)
     g_play_btn = lv_btn_create(g_screen);
     lv_obj_set_size(g_play_btn, 50, 50);
     lv_obj_set_style_bg_opa(g_play_btn, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_shadow_width(g_play_btn, 0, LV_PART_MAIN);
     lv_obj_set_style_border_width(g_play_btn, 0, LV_PART_MAIN);
-    lv_obj_align(g_play_btn, LV_ALIGN_BOTTOM_LEFT, 75, -47);
+    lv_obj_align(g_play_btn, LV_ALIGN_BOTTOM_LEFT, 75, -37);
     lv_obj_add_event_cb(g_play_btn, play_pause_event_cb, LV_EVENT_CLICKED, NULL);
-    
+
     g_play_label = lv_label_create(g_play_btn);
     lv_label_set_text(g_play_label, LV_SYMBOL_PLAY);
     lv_obj_set_style_text_color(g_play_label, COLOR_TEXT_PRIMARY, LV_PART_MAIN);
     lv_obj_set_style_text_font(g_play_label, &lv_font_montserrat_28, LV_PART_MAIN);
     lv_obj_center(g_play_label);
-    
+
     // Next button (icon only)
     lv_obj_t *next_btn = lv_btn_create(g_screen);
     lv_obj_set_size(next_btn, 40, 40);
     lv_obj_set_style_bg_opa(next_btn, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_shadow_width(next_btn, 0, LV_PART_MAIN);
     lv_obj_set_style_border_width(next_btn, 0, LV_PART_MAIN);
-    lv_obj_align(next_btn, LV_ALIGN_BOTTOM_LEFT, 140, -50);
+    lv_obj_align(next_btn, LV_ALIGN_BOTTOM_LEFT, 140, -40);
     lv_obj_add_event_cb(next_btn, next_event_cb, LV_EVENT_CLICKED, NULL);
     
     lv_obj_t *next_icon = lv_label_create(next_btn);

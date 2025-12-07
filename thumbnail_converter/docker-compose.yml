@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  thumbnail-converter:
+    build: .
+    container_name: esp32-thumbnail-converter
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - RUST_LOG=info
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

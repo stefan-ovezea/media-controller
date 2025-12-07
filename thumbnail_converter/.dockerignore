@@ -1,0 +1,7 @@
+target/
+.git/
+.gitignore
+*.md
+run.sh
+run.bat
+config.toml

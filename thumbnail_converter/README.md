@@ -11,16 +11,19 @@ Home Assistant sends large PNG thumbnails (often 300x300 or larger) that exceed 
 This service acts as an MQTT middleware that:
 1. Subscribes to Home Assistant's original thumbnail topic
 2. Converts PNG to JPEG (better compression for photos)
-3. Resizes images to 64x64 pixels (configurable)
-4. Publishes the optimized thumbnail to a new topic for the ESP32
+3. Resizes images to 170x170 pixels (matches ESP32 screen height)
+4. Applies horizontal fade gradient effect (fade to black on left side)
+5. Publishes the optimized thumbnail to a new topic for the ESP32
 
 ## Features
 
 - **PNG to JPEG conversion** - Smaller file sizes with minimal quality loss
 - **Smart resizing** - Maintains aspect ratio using high-quality Lanczos3 filter
+- **Horizontal fade effect** - Gradient fade to black on left side for stylish display
 - **Automatic format detection** - Handles both PNG and JPEG inputs
 - **Low overhead** - Efficient Rust implementation
 - **Configurable** - Adjust size and quality via config file
+- **Docker ready** - Easy deployment with included Dockerfile and docker-compose
 
 ## Installation
 
@@ -52,8 +55,8 @@ source = "hass.agent/media_player/DESTEPTUL/thumbnail"
 destination = "hass.agent/media_player/DESTEPTUL/thumbnail_small"
 
 [image]
-size = 64      # Output size in pixels (64x64 recommended for ESP32-C6)
-quality = 80   # JPEG quality 0-100
+size = 170     # Output size in pixels (170x170 matches ESP32 screen height)
+quality = 85   # JPEG quality 0-100
 ```
 
 ## Usage
@@ -98,22 +101,37 @@ sudo systemctl start thumbnail-converter
 
 ### Running with Docker
 
-Create `Dockerfile`:
-```dockerfile
-FROM rust:1.75 as builder
-WORKDIR /app
-COPY . .
-RUN cargo build --release
+The easiest way to run on a server! Docker files are included.
 
-FROM debian:bookworm-slim
-COPY --from=builder /app/target/release/thumbnail_converter /usr/local/bin/
-CMD ["thumbnail_converter"]
+**Using Docker Compose (Recommended):**
+```bash
+cd thumbnail_converter
+docker-compose up -d
 ```
 
-Build and run:
+**Using Docker directly:**
 ```bash
+# Build
 docker build -t thumbnail-converter .
-docker run -d --name thumbnail-converter --restart always thumbnail-converter
+
+# Run with host networking (required for MQTT)
+docker run -d \
+  --name thumbnail-converter \
+  --network host \
+  --restart unless-stopped \
+  thumbnail-converter
+```
+
+**View logs:**
+```bash
+docker-compose logs -f          # With docker-compose
+docker logs -f thumbnail-converter  # Without docker-compose
+```
+
+**Stop the service:**
+```bash
+docker-compose down             # With docker-compose
+docker stop thumbnail-converter  # Without docker-compose
 ```
 
 ## ESP32 Configuration
@@ -125,15 +143,16 @@ In `main/app_config.h`:
 #define MQTT_TOPIC_THUMB "hass.agent/media_player/DESTEPTUL/thumbnail_small"
 ```
 
-The ESP32 will now receive optimized 64x64 JPEG thumbnails instead of large PNGs!
+The ESP32 will now receive optimized 170x170 JPEG thumbnails with fade effect instead of large PNGs!
 
 ## Performance
 
 Example conversion:
-- **Input**: 150x83 PNG (17.9 KB)
-- **Output**: 64x64 JPEG (2-4 KB)
-- **Reduction**: ~80% smaller
-- **ESP32 memory needed**: ~8KB (64x64 RGB565) vs ~25KB (150x83)
+- **Input**: 300x300 PNG (~110 KB)
+- **Output**: 170x170 JPEG with fade effect (~10-12 KB)
+- **Reduction**: ~90% smaller
+- **ESP32 memory needed**: ~58KB (170x170 RGB565) - fits comfortably in available heap
+- **Processing time**: < 50ms per image on modern hardware
 
 ## Troubleshooting
 
