@@ -217,8 +217,8 @@ esp_err_t mqtt_handler_init(void)
     
     esp_mqtt_client_config_t mqtt_cfg = {
         .broker.address.uri = MQTT_BROKER_URI,
-        .buffer.size = 8192,  // Large buffer for thumbnail fragments (increased from 2048)
-        .buffer.out_size = 1024,
+        .buffer.size = 4096,  // Reduced from 8192 to save ~4KB RAM (64x64 PNG fits easily)
+        .buffer.out_size = 512,  // Reduced from 1024
     };
     
     s_mqtt_client = esp_mqtt_client_init(&mqtt_cfg);

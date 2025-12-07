@@ -53,7 +53,8 @@
 // MQTT Configuration
 #define MQTT_BROKER_URI  "mqtt://192.168.16.100:1883"
 #define MQTT_TOPIC_STATE "hass.agent/media_player/DESTEPTUL/state"
-#define MQTT_TOPIC_THUMB "hass.agent/media_player/DESTEPTUL/thumbnail"
+// Use the optimized thumbnail topic from the Rust converter service (64x64 JPEG)
+#define MQTT_TOPIC_THUMB "hass.agent/media_player/DESTEPTUL/thumbnail_small"
 
 // Application Configuration
 #define APP_TAG         "MediaController"

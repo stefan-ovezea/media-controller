@@ -1,0 +1,27 @@
+# Memory optimization settings for PNG decoding on ESP32-C6
+# Add these to your sdkconfig or sdkconfig.defaults to free up ~20-30KB of RAM
+
+# Reduce LWIP memory usage
+CONFIG_LWIP_MAX_SOCKETS=4
+CONFIG_LWIP_TCP_MSL=15000
+CONFIG_LWIP_TCP_MAXRTX=6
+CONFIG_LWIP_TCP_SYNMAXRTX=3
+CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=8
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=4
+CONFIG_LWIP_UDP_RECVMBOX_SIZE=4
+
+# Reduce MQTT buffer (you have 8192, can reduce to 4096)
+# Edit in main code: .buffer.size = 4096
+
+# Reduce main task stack if possible
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=3072
+
+# Enable heap task tracking to debug memory usage
+# CONFIG_HEAP_TASK_TRACKING=y
+
+# Place more functions in flash to save RAM
+CONFIG_LWIP_IRAM_OPTIMIZATION=n
+CONFIG_FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y
+
+# Disable unnecessary features
+CONFIG_ESP_ERR_TO_NAME_LOOKUP=n

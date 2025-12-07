@@ -9,13 +9,15 @@
 #include "freertos/task.h"
 #include "freertos/timers.h"
 #include "display/lvgl_setup.h"
-#include "pngle.h"  // Lightweight PNG decoder
+#include "esp_lv_decoder.h"  // ESP LVGL decoder for JPEG/PNG
 
 static const char *TAG = "ui_media";
 
 // UI element references
 static lv_obj_t *g_screen = NULL;
 static lv_obj_t *g_bg_img = NULL;  // Background image for album art
+static lv_obj_t *g_gradient = NULL;  // Initial gradient background (deleted when first thumbnail arrives)
+static lv_obj_t *g_img_gradient = NULL;  // Gradient overlay on image (persists)
 static lv_obj_t *g_title_label = NULL;
 static lv_obj_t *g_artist_label = NULL;
 static lv_obj_t *g_play_btn = NULL;
@@ -23,22 +25,15 @@ static lv_obj_t *g_play_label = NULL;
 static lv_obj_t *g_progress_bar = NULL;
 
 // Thumbnail image data - must persist for LVGL and shared with MQTT
-#define MAX_THUMBNAIL_SIZE (160 * 1024)  // 160KB max to handle larger album art
+// Reduced to 20KB to fit 64x64 PNG (typically 3-8KB compressed)
+// For larger thumbnails, reduce quality or size in Home Assistant
+#define MAX_THUMBNAIL_SIZE (20 * 1024)  // 20KB max for compressed PNG
 static uint8_t *g_thumbnail_data = NULL;
 static int g_thumbnail_len = 0;
 static lv_img_dsc_t g_thumbnail_dsc;
 
-// Pngle decoder context for incremental decoding
-typedef struct {
-    lv_img_dsc_t *img_dsc;
-    lv_color_t *line_buf;  // Single line buffer for RGB565 conversion
-    uint32_t width;
-    uint32_t height;
-    uint32_t current_y;
-    uint8_t *decoded_data;  // RGB565 output buffer
-} pngle_decode_ctx_t;
-
-static pngle_decode_ctx_t g_pngle_ctx = {0};
+// Decoded image data (persists for LVGL to display)
+static uint8_t *g_decoded_image_data = NULL;
 
 // Media state
 static media_state_t g_media_state = {
@@ -60,76 +55,7 @@ static void update_ui(void);
 static void format_time(char *buf, uint32_t seconds);
 static void progress_timer_cb(TimerHandle_t timer);
 
-// Pngle callback for PNG initialization
-static void pngle_on_init(pngle_t *pngle, uint32_t w, uint32_t h)
-{
-    pngle_decode_ctx_t *ctx = (pngle_decode_ctx_t *)pngle_get_user_data(pngle);
-    
-    ESP_LOGI(TAG, "PNG init: %" PRIu32 "x%" PRIu32, w, h);
-    ctx->width = w;
-    ctx->height = h;
-    ctx->current_y = 0;
-    
-    // Allocate output buffer for RGB565 data (2 bytes per pixel)
-    size_t img_size = w * h * sizeof(lv_color_t);
-    ctx->decoded_data = heap_caps_malloc(img_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (ctx->decoded_data == NULL) {
-        ctx->decoded_data = malloc(img_size);
-    }
-    
-    if (ctx->decoded_data == NULL) {
-        ESP_LOGE(TAG, "Failed to allocate %zu bytes for decoded image", img_size);
-        return;
-    }
-    
-    ESP_LOGI(TAG, "Allocated %zu bytes for decoded image", img_size);
-    
-    // Allocate line buffer for RGB conversion (RGBA input)
-    ctx->line_buf = malloc(w * sizeof(lv_color_t));
-    if (ctx->line_buf == NULL) {
-        ESP_LOGE(TAG, "Failed to allocate line buffer");
-        free(ctx->decoded_data);
-        ctx->decoded_data = NULL;
-        return;
-    }
-}
-
-// Pngle callback for each decoded pixel
-static void pngle_on_draw(pngle_t *pngle, uint32_t x, uint32_t y, uint32_t w, uint32_t h, const uint8_t rgba[4])
-{
-    pngle_decode_ctx_t *ctx = (pngle_decode_ctx_t *)pngle_get_user_data(pngle);
-    
-    if (ctx->decoded_data == NULL || ctx->line_buf == NULL) {
-        return;
-    }
-    
-    // Convert RGBA8888 to RGB565 and store in output buffer
-    lv_color_t *pixel = (lv_color_t *)(ctx->decoded_data + (y * ctx->width + x) * sizeof(lv_color_t));
-    
-    // Convert RGBA to RGB565 (LVGL color format)
-    // Note: LVGL RGB565 format has different layouts on different platforms
-    #if LV_COLOR_DEPTH == 16 && LV_COLOR_16_SWAP == 0
-        pixel->full = ((rgba[0] & 0xF8) << 8) | ((rgba[1] & 0xFC) << 3) | (rgba[2] >> 3);
-    #else
-        pixel->ch.red = rgba[0] >> 3;      // 8-bit to 5-bit
-        pixel->ch.green_h = rgba[1] >> 2;    // 8-bit to 6-bit  
-        pixel->ch.blue = rgba[2] >> 3;     // 8-bit to 5-bit
-    #endif
-    // Alpha channel (rgba[3]) is ignored for now
-}
-
-// Pngle callback when decoding is done
-static void pngle_on_done(pngle_t *pngle)
-{
-    pngle_decode_ctx_t *ctx = (pngle_decode_ctx_t *)pngle_get_user_data(pngle);
-    ESP_LOGI(TAG, "PNG decode complete: %" PRIu32 "x%" PRIu32, ctx->width, ctx->height);
-    
-    // Free line buffer, we don't need it anymore
-    if (ctx->line_buf) {
-        free(ctx->line_buf);
-        ctx->line_buf = NULL;
-    }
-}
+// No callback functions needed for esp_lv_decoder - it's simpler!
 
 lv_obj_t *ui_media_create(void)
 {
@@ -163,17 +89,17 @@ lv_obj_t *ui_media_create(void)
         ESP_LOGI(TAG, "Thumbnail buffer allocated: %p (display disabled)", g_thumbnail_data);
     }
     
-    // Gradient overlay (fade from left to right)
-    lv_obj_t *gradient = lv_obj_create(g_screen);
-    lv_obj_set_size(gradient, LCD_H_RES, LCD_V_RES);
-    lv_obj_set_style_bg_opa(gradient, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_bg_grad_dir(gradient, LV_GRAD_DIR_HOR, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(gradient, COLOR_BG_PRIMARY, LV_PART_MAIN);
-    lv_obj_set_style_bg_grad_color(gradient, lv_color_hex(0x000000), LV_PART_MAIN);
-    lv_obj_set_style_bg_grad_stop(gradient, 180, LV_PART_MAIN);  // Fade starts at 70%
-    lv_obj_set_style_border_width(gradient, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(gradient, 0, LV_PART_MAIN);
-    lv_obj_align(gradient, LV_ALIGN_CENTER, 0, 0);
+    // Gradient overlay (fade from left to right) - will be deleted when thumbnail arrives
+    g_gradient = lv_obj_create(g_screen);
+    lv_obj_set_size(g_gradient, LCD_H_RES, LCD_V_RES);
+    lv_obj_set_style_bg_opa(g_gradient, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_grad_dir(g_gradient, LV_GRAD_DIR_HOR, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(g_gradient, COLOR_BG_PRIMARY, LV_PART_MAIN);
+    lv_obj_set_style_bg_grad_color(g_gradient, lv_color_hex(0x000000), LV_PART_MAIN);
+    lv_obj_set_style_bg_grad_stop(g_gradient, 180, LV_PART_MAIN);  // Fade starts at 70%
+    lv_obj_set_style_border_width(g_gradient, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(g_gradient, 0, LV_PART_MAIN);
+    lv_obj_align(g_gradient, LV_ALIGN_CENTER, 0, 0);
     
     // === LEFT SIDE: Song Info + Controls ===
     
@@ -345,101 +271,122 @@ void ui_media_update_thumbnail(const uint8_t *data, int data_len)
         ESP_LOGW(TAG, "Invalid thumbnail data");
         return;
     }
-    
+
     if (g_thumbnail_data == NULL) {
         ESP_LOGE(TAG, "Thumbnail buffer not allocated");
         return;
     }
-    
+
     if (data_len > MAX_THUMBNAIL_SIZE) {
         ESP_LOGW(TAG, "Thumbnail too large: %d bytes (max %d)", data_len, MAX_THUMBNAIL_SIZE);
         return;
     }
-    
-    // Check available heap before decoding
+
+    // Check available heap
     size_t free_heap = esp_get_free_heap_size();
-    size_t min_free_heap = esp_get_minimum_free_heap_size();
-    ESP_LOGI(TAG, "Updating thumbnail: %d bytes (free heap: %" PRIu32 ", min: %" PRIu32 ")", 
-             data_len, (uint32_t)free_heap, (uint32_t)min_free_heap);
-    
-    // Debug: Check first few bytes to verify image format
+    ESP_LOGI(TAG, "Updating thumbnail: %d bytes (free heap: %" PRIu32 ")",
+             data_len, (uint32_t)free_heap);
+
+    // Detect image format
     if (data_len >= 4) {
-        ESP_LOGI(TAG, "Thumbnail header: %02X %02X %02X %02X", 
+        ESP_LOGI(TAG, "Thumbnail header: %02X %02X %02X %02X",
                  data[0], data[1], data[2], data[3]);
-        
-        // Detect format - pngle only supports PNG
+
         if (data[0] == 0xFF && data[1] == 0xD8) {
-            ESP_LOGW(TAG, "JPEG format detected, but pngle only supports PNG");
-            ESP_LOGW(TAG, "Please configure Home Assistant to send PNG thumbnails");
-            return;
-        } else if (data[0] != 0x89 || data[1] != 0x50 || data[2] != 0x4E || data[3] != 0x47) {
-            ESP_LOGW(TAG, "Unknown image format (not PNG)");
+            ESP_LOGI(TAG, "Detected JPEG format");
+        } else if (data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47) {
+            ESP_LOGI(TAG, "Detected PNG format");
+        } else {
+            ESP_LOGW(TAG, "Unknown image format");
             return;
         }
-        ESP_LOGI(TAG, "Detected PNG format - decoding with pngle");
     }
-    
-    // Initialize pngle decoder
-    ESP_LOGI(TAG, "Creating pngle decoder (free heap: %" PRIu32 " bytes)...", (uint32_t)esp_get_free_heap_size());
-    pngle_t *pngle = pngle_new();
-    if (pngle == NULL) {
-        ESP_LOGE(TAG, "Failed to create pngle decoder (out of memory)");
-        ESP_LOGE(TAG, "Free heap: %" PRIu32 " bytes", (uint32_t)esp_get_free_heap_size());
-        return;
-    }
-    ESP_LOGI(TAG, "pngle decoder created successfully");
-    
-    // Set up context and callbacks
-    memset(&g_pngle_ctx, 0, sizeof(g_pngle_ctx));
-    g_pngle_ctx.img_dsc = &g_thumbnail_dsc;
-    pngle_set_user_data(pngle, &g_pngle_ctx);
-    pngle_set_init_callback(pngle, pngle_on_init);
-    pngle_set_draw_callback(pngle, pngle_on_draw);
-    pngle_set_done_callback(pngle, pngle_on_done);
-    
-    // Feed PNG data to pngle incrementally
-    ESP_LOGI(TAG, "Feeding %d bytes to pngle decoder...", data_len);
-    int fed = pngle_feed(pngle, data, data_len);
-    
-    if (fed < 0) {
-        ESP_LOGE(TAG, "pngle_feed failed: %d (%s)", fed, pngle_error(pngle));
-        pngle_destroy(pngle);
-        if (g_pngle_ctx.decoded_data) {
-            free(g_pngle_ctx.decoded_data);
-            g_pngle_ctx.decoded_data = NULL;
+
+    // CRITICAL: Copy JPEG data to persistent buffer!
+    // The 'data' pointer from MQTT will be freed after this function returns
+    memcpy(g_thumbnail_data, data, data_len);
+    g_thumbnail_len = data_len;
+
+    if (lvgl_lock(1000)) {
+        // Delete the gradient overlay on first thumbnail
+        if (g_gradient != NULL) {
+            lv_obj_del(g_gradient);
+            g_gradient = NULL;
+            ESP_LOGI(TAG, "Removed gradient overlay");
         }
-        return;
-    }
-    
-    ESP_LOGI(TAG, "PNG decoded successfully: %" PRIu32 "x%" PRIu32 ", consumed %d bytes", 
-             (uint32_t)g_pngle_ctx.width, (uint32_t)g_pngle_ctx.height, fed);
-    
-    // Setup LVGL image descriptor with decoded RGB565 data
-    g_thumbnail_dsc.header.always_zero = 0;
-    g_thumbnail_dsc.header.w = g_pngle_ctx.width;
-    g_thumbnail_dsc.header.h = g_pngle_ctx.height;
-    g_thumbnail_dsc.header.cf = LV_IMG_CF_TRUE_COLOR;  // RGB565
-    g_thumbnail_dsc.data_size = g_pngle_ctx.width * g_pngle_ctx.height * sizeof(lv_color_t);
-    g_thumbnail_dsc.data = g_pngle_ctx.decoded_data;
-    
-    // Update the background image
-    if (lvgl_lock(100)) {
+
+        // Clean up old image widget
+        if (g_bg_img != NULL) {
+            lv_obj_del(g_bg_img);
+            g_bg_img = NULL;
+        }
+
+        // Free old decoded image data from decoder
+        if (g_decoded_image_data != NULL) {
+            free(g_decoded_image_data);
+            g_decoded_image_data = NULL;
+            ESP_LOGI(TAG, "Freed old decoded image data");
+        }
+
+        // Create new image widget
+        g_bg_img = lv_img_create(g_screen);
+        if (g_bg_img == NULL) {
+            ESP_LOGE(TAG, "Failed to create image object");
+            lvgl_unlock();
+            return;
+        }
+
+        // Setup LVGL image descriptor pointing to PERSISTENT buffer
+        g_thumbnail_dsc.header.always_zero = 0;
+        g_thumbnail_dsc.header.cf = LV_IMG_CF_RAW;  // Raw compressed data (JPEG/PNG)
+        g_thumbnail_dsc.header.w = 0;  // Will be determined by decoder
+        g_thumbnail_dsc.header.h = 0;
+        g_thumbnail_dsc.data_size = g_thumbnail_len;
+        g_thumbnail_dsc.data = g_thumbnail_data;  // Points to persistent buffer!
+
+        // Set the image source - LVGL will decode it automatically!
         lv_img_set_src(g_bg_img, &g_thumbnail_dsc);
-        
-        // Make image visible and configure appearance
-        lv_obj_clear_flag(g_bg_img, LV_OBJ_FLAG_HIDDEN);
-        lv_img_set_zoom(g_bg_img, 256);  // 1x zoom initially
-        lv_obj_set_style_img_opa(g_bg_img, LV_OPA_40, LV_PART_MAIN);
-        
+
+        // Position image on the RIGHT side of screen, filling the height
+        // Your screen is 320x170 (landscape), so make image fill the right side
+        lv_obj_set_size(g_bg_img, LCD_V_RES, LCD_V_RES);  // 170x170 square on right
+        lv_obj_align(g_bg_img, LV_ALIGN_RIGHT_MID, 0, 0);
+        lv_obj_clear_flag(g_bg_img, LV_OBJ_FLAG_SCROLLABLE);
+
+        // Enable image scaling to fill the area
+        lv_obj_set_style_transform_pivot_x(g_bg_img, LCD_V_RES / 2, LV_PART_MAIN);
+        lv_obj_set_style_transform_pivot_y(g_bg_img, LCD_V_RES / 2, LV_PART_MAIN);
+
+        // Full opacity for album art (no transparency)
+        lv_obj_set_style_img_opa(g_bg_img, LV_OPA_COVER, LV_PART_MAIN);
+
+        // Move to background (behind text/controls)
+        lv_obj_move_background(g_bg_img);
+
+        // Create gradient overlay ONLY ONCE (not every time!)
+        if (g_img_gradient == NULL) {
+            g_img_gradient = lv_obj_create(g_screen);
+            lv_obj_set_size(g_img_gradient, LCD_H_RES, LCD_V_RES);
+            lv_obj_set_style_bg_opa(g_img_gradient, LV_OPA_TRANSP, LV_PART_MAIN);  // Transparent background
+            lv_obj_set_style_bg_grad_dir(g_img_gradient, LV_GRAD_DIR_HOR, LV_PART_MAIN);
+            lv_obj_set_style_bg_color(g_img_gradient, COLOR_BG_PRIMARY, LV_PART_MAIN);  // Solid on left
+            lv_obj_set_style_bg_grad_color(g_img_gradient, lv_color_hex(0x000000), LV_PART_MAIN);  // Fade to transparent on right
+            lv_obj_set_style_bg_grad_stop(g_img_gradient, 180, LV_PART_MAIN);  // Gradient starts at ~70%
+            lv_obj_set_style_border_width(g_img_gradient, 0, LV_PART_MAIN);
+            lv_obj_set_style_pad_all(g_img_gradient, 0, LV_PART_MAIN);
+            lv_obj_align(g_img_gradient, LV_ALIGN_CENTER, 0, 0);
+
+            // Position it between image and text (above image, below UI controls)
+            lv_obj_move_to_index(g_img_gradient, 1);
+
+            ESP_LOGI(TAG, "Created gradient overlay");
+        }
+
         lvgl_unlock();
-        ESP_LOGI(TAG, "Thumbnail displayed on screen");
+        ESP_LOGI(TAG, "Thumbnail displayed");
     } else {
-        ESP_LOGW(TAG, "Failed to acquire LVGL lock for thumbnail update");
+        ESP_LOGW(TAG, "Failed to acquire LVGL lock");
     }
-    
-    // Clean up pngle decoder
-    pngle_destroy(pngle);
-    
-    // Check heap after decode
+
     ESP_LOGI(TAG, "Free heap after decode: %" PRIu32 " bytes", (uint32_t)esp_get_free_heap_size());
 }
