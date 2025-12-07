@@ -31,7 +31,7 @@
 #define LCD_PIXEL_CLOCK_HZ (20 * 1000 * 1000)
 
 // Display Buffer Configuration
-#define LCD_DMA_LINES   (LCD_V_RES / 2)
+#define LCD_DMA_LINES   (LCD_V_RES / 4)  // Reduced from /2 to /4 to save DMA memory
 
 // LVGL Configuration
 #define LVGL_TICK_PERIOD_MS     2
@@ -49,6 +49,11 @@
 #define WIFI_SSID       "wirelesss"
 #define WIFI_PASSWORD   "apacaldahaideshimdighel"
 #define WIFI_MAX_RETRY  5
+
+// MQTT Configuration
+#define MQTT_BROKER_URI  "mqtt://192.168.16.100:1883"
+#define MQTT_TOPIC_STATE "hass.agent/media_player/DESTEPTUL/state"
+#define MQTT_TOPIC_THUMB "hass.agent/media_player/DESTEPTUL/thumbnail"
 
 // Application Configuration
 #define APP_TAG         "MediaController"

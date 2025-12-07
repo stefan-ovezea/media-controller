@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "esp_lv_decoder.h"
 
 static const char *TAG = "lvgl_setup";
 static SemaphoreHandle_t lvgl_mux = NULL;
@@ -27,6 +28,11 @@ esp_err_t lvgl_init(esp_lcd_panel_handle_t panel_handle)
     
     // Initialize LVGL
     lv_init();
+    
+    // Initialize JPEG decoder for album art display
+    esp_lv_decoder_handle_t decoder_handle;
+    esp_lv_decoder_init(&decoder_handle);
+    ESP_LOGI(TAG, "JPEG decoder initialized");
     
     // Allocate display buffers (double buffering)
     lv_color_t *buf1 = heap_caps_malloc(LCD_H_RES * LCD_DMA_LINES * sizeof(lv_color_t), MALLOC_CAP_DMA);

@@ -1,6 +1,11 @@
 idf_component_register(SRCS "main.c"
                             "display/display_driver.c"
                             "display/lvgl_setup.c"
+                            "network/wifi_manager.c"
+                            "network/mqtt_handler.c"
                             "ui/ui_manager.c"
                             "ui/ui_hello.c"
-                    INCLUDE_DIRS "." "display" "ui")
+                            "ui/ui_components.c"
+                            "ui/ui_media.c"
+                    INCLUDE_DIRS "." "display" "ui" "network"
+                    REQUIRES espressif__mqtt espressif__esp_lv_decoder espressif__libpng esp_wifi nvs_flash json i2c_bsp)
