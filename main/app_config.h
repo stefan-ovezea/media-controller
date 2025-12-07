@@ -55,6 +55,7 @@
 #define MQTT_TOPIC_STATE "hass.agent/media_player/DESTEPTUL/state"
 // Use the optimized thumbnail topic from the Rust converter service (64x64 JPEG)
 #define MQTT_TOPIC_THUMB "hass.agent/media_player/DESTEPTUL/thumbnail_small"
+#define MQTT_TOPIC_CMD   "hass.agent/media_player/DESTEPTUL/cmd"
 
 // Application Configuration
 #define APP_TAG         "MediaController"

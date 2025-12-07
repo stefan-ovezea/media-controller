@@ -41,7 +41,32 @@ fn convert_png_to_jpeg(png_data: &[u8], size: u32, quality: u8) -> Result<Vec<u8
     info!("Resized to: {}x{}", thumbnail.width(), thumbnail.height());
 
     // Convert to RGB8 for JPEG encoding (JPEG doesn't support alpha channel)
-    let rgb_image = thumbnail.to_rgb8();
+    let mut rgb_image = thumbnail.to_rgb8();
+
+    // Apply horizontal fade effect (fade to black from right to left)
+    // This creates a nice gradient effect when displayed on the ESP32
+    let width = rgb_image.width();
+    let height = rgb_image.height();
+
+    // Fade starts at 30% from the left, fully faded by 0%
+    let fade_start = (width as f32 * 0.30) as u32;
+
+    for y in 0..height {
+        for x in 0..width {
+            if x < fade_start {
+                let pixel = rgb_image.get_pixel_mut(x, y);
+                // Calculate fade factor (0.0 at x=0, 1.0 at fade_start)
+                let fade_factor = x as f32 / fade_start as f32;
+
+                // Apply fade to each color channel
+                pixel[0] = (pixel[0] as f32 * fade_factor) as u8;  // Red
+                pixel[1] = (pixel[1] as f32 * fade_factor) as u8;  // Green
+                pixel[2] = (pixel[2] as f32 * fade_factor) as u8;  // Blue
+            }
+        }
+    }
+
+    info!("Applied horizontal fade effect");
 
     // Convert to JPEG
     let mut jpeg_bytes = Vec::new();
@@ -169,7 +194,31 @@ async fn main() -> Result<()> {
                             );
 
                             // Convert to RGB8 for JPEG encoding
-                            let rgb_image = thumbnail.to_rgb8();
+                            let mut rgb_image = thumbnail.to_rgb8();
+
+                            // Apply horizontal fade effect (fade to black from right to left)
+                            let width = rgb_image.width();
+                            let height = rgb_image.height();
+
+                            // Fade starts at 30% from the left, fully faded by 0%
+                            let fade_start = (width as f32 * 0.30) as u32;
+
+                            for y in 0..height {
+                                for x in 0..width {
+                                    if x < fade_start {
+                                        let pixel = rgb_image.get_pixel_mut(x, y);
+                                        // Calculate fade factor (0.0 at x=0, 1.0 at fade_start)
+                                        let fade_factor = x as f32 / fade_start as f32;
+
+                                        // Apply fade to each color channel
+                                        pixel[0] = (pixel[0] as f32 * fade_factor) as u8;  // Red
+                                        pixel[1] = (pixel[1] as f32 * fade_factor) as u8;  // Green
+                                        pixel[2] = (pixel[2] as f32 * fade_factor) as u8;  // Blue
+                                    }
+                                }
+                            }
+
+                            info!("Applied horizontal fade effect");
 
                             let mut jpeg_bytes = Vec::new();
 

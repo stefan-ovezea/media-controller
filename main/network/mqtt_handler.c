@@ -258,3 +258,25 @@ void mqtt_handler_set_thumbnail_buffer(uint8_t *buffer, size_t size)
     s_thumb_buffer_size = size;
     ESP_LOGI(TAG, "Thumbnail buffer set: %p, size: %zu bytes", buffer, size);
 }
+
+esp_err_t mqtt_handler_publish(const char *topic, const char *data, int len, int qos, int retain)
+{
+    if (s_mqtt_client == NULL) {
+        ESP_LOGE(TAG, "MQTT client not initialized");
+        return ESP_FAIL;
+    }
+
+    if (!s_is_connected) {
+        ESP_LOGW(TAG, "MQTT not connected, cannot publish");
+        return ESP_FAIL;
+    }
+
+    int msg_id = esp_mqtt_client_publish(s_mqtt_client, topic, data, len, qos, retain);
+    if (msg_id < 0) {
+        ESP_LOGE(TAG, "Failed to publish message to topic: %s", topic);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "Published to %s, msg_id=%d", topic, msg_id);
+    return ESP_OK;
+}

@@ -10,6 +10,8 @@
 #include "freertos/timers.h"
 #include "display/lvgl_setup.h"
 #include "esp_lv_decoder.h"  // ESP LVGL decoder for JPEG/PNG
+#include "network/mqtt_handler.h"
+#include "cJSON.h"
 
 static const char *TAG = "ui_media";
 
@@ -179,20 +181,56 @@ lv_obj_t *ui_media_create(void)
 
 static void play_pause_event_cb(lv_event_t *e)
 {
-    // Display-only mode - buttons do nothing for now
-    ESP_LOGI(TAG, "Play/Pause button clicked (no action)");
+    ESP_LOGI(TAG, "Play/Pause button clicked");
+
+    // Send play or pause command based on current state
+    const char *command = g_media_state.is_playing ? "pause" : "play";
+
+    // Create JSON payload: {"command": "play", "data": null}
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddStringToObject(json, "command", command);
+    cJSON_AddNullToObject(json, "data");
+
+    char *json_str = cJSON_PrintUnformatted(json);
+    if (json_str) {
+        mqtt_handler_publish(MQTT_TOPIC_CMD, json_str, strlen(json_str), 0, 0);
+        free(json_str);
+    }
+    cJSON_Delete(json);
 }
 
 static void prev_event_cb(lv_event_t *e)
 {
-    // Display-only mode - buttons do nothing for now
-    ESP_LOGI(TAG, "Previous button clicked (no action)");
+    ESP_LOGI(TAG, "Previous button clicked");
+
+    // Create JSON payload: {"command": "previous", "data": null}
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddStringToObject(json, "command", "previous");
+    cJSON_AddNullToObject(json, "data");
+
+    char *json_str = cJSON_PrintUnformatted(json);
+    if (json_str) {
+        mqtt_handler_publish(MQTT_TOPIC_CMD, json_str, strlen(json_str), 0, 0);
+        free(json_str);
+    }
+    cJSON_Delete(json);
 }
 
 static void next_event_cb(lv_event_t *e)
 {
-    // Display-only mode - buttons do nothing for now
-    ESP_LOGI(TAG, "Next button clicked (no action)");
+    ESP_LOGI(TAG, "Next button clicked");
+
+    // Create JSON payload: {"command": "next", "data": null}
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddStringToObject(json, "command", "next");
+    cJSON_AddNullToObject(json, "data");
+
+    char *json_str = cJSON_PrintUnformatted(json);
+    if (json_str) {
+        mqtt_handler_publish(MQTT_TOPIC_CMD, json_str, strlen(json_str), 0, 0);
+        free(json_str);
+    }
+    cJSON_Delete(json);
 }
 
 static void progress_timer_cb(TimerHandle_t timer)
@@ -233,7 +271,16 @@ void ui_media_update_state(const media_state_t *state)
         g_media_state.duration_sec = state->duration_sec;
         g_media_state.position_sec = state->position_sec;
         g_media_state.is_playing = state->is_playing;
-        
+
+        // Truncate title if too long (max 25 chars, truncate to 22 + "...")
+        size_t title_len = strlen(g_media_state.title);
+        if (title_len > 25) {
+            g_media_state.title[22] = '.';
+            g_media_state.title[23] = '.';
+            g_media_state.title[24] = '.';
+            g_media_state.title[25] = '\0';
+        }
+
         // Update UI elements
         lv_label_set_text(g_title_label, g_media_state.title);
         lv_label_set_text(g_artist_label, g_media_state.artist);
