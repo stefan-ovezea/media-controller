@@ -142,7 +142,7 @@ lv_obj_t *ui_media_create(void)
     lv_obj_set_style_bg_opa(g_play_btn, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_shadow_width(g_play_btn, 0, LV_PART_MAIN);
     lv_obj_set_style_border_width(g_play_btn, 0, LV_PART_MAIN);
-    lv_obj_align(g_play_btn, LV_ALIGN_BOTTOM_LEFT, 75, -37);
+    lv_obj_align(g_play_btn, LV_ALIGN_BOTTOM_LEFT, 75, -34);
     lv_obj_add_event_cb(g_play_btn, play_pause_event_cb, LV_EVENT_CLICKED, NULL);
 
     g_play_label = lv_label_create(g_play_btn);
@@ -394,12 +394,26 @@ void ui_media_update_thumbnail(const uint8_t *data, int data_len)
         // Set the image source - LVGL will decode it automatically!
         lv_img_set_src(g_bg_img, &g_thumbnail_dsc);
 
-        // DO NOT set size - let image use its natural decoded size to avoid tiling
-        // Just position it on the right side
+        // Get the actual decoded image dimensions
+        lv_img_header_t img_header;
+        lv_res_t res = lv_img_decoder_get_info(&g_thumbnail_dsc, &img_header);
+
+        if (res == LV_RES_OK && img_header.h > 0) {
+            // Calculate zoom to fill 170px height (256 = 1x zoom in LVGL)
+            uint16_t zoom_factor = (LCD_V_RES * 256) / img_header.h;
+            lv_img_set_zoom(g_bg_img, zoom_factor);
+            ESP_LOGI(TAG, "Image: %dx%d, zoom: %d (fill height to %d)",
+                     img_header.w, img_header.h, zoom_factor, LCD_V_RES);
+        } else {
+            // Fallback: no zoom
+            lv_img_set_zoom(g_bg_img, 256);
+        }
+
+        // Position on the right side - will align right edge
         lv_obj_align(g_bg_img, LV_ALIGN_RIGHT_MID, 0, 0);
         lv_obj_clear_flag(g_bg_img, LV_OBJ_FLAG_SCROLLABLE);
 
-        // Set image recolor mode to NONE (disables tiling effect)
+        // Use real size mode (no tiling)
         lv_img_set_size_mode(g_bg_img, LV_IMG_SIZE_MODE_REAL);
 
         // Full opacity for album art (no transparency)
