@@ -1,0 +1,4 @@
+version: "1.0.0"
+description: "Pngle wrapper - Lightweight PNG decoder for embedded systems"
+url: "https://github.com/kikuchan/pngle"
+

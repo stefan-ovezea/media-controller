@@ -9,6 +9,7 @@
 #include "freertos/task.h"
 #include "freertos/timers.h"
 #include "display/lvgl_setup.h"
+#include "pngle.h"  // Lightweight PNG decoder
 
 static const char *TAG = "ui_media";
 
@@ -26,6 +27,18 @@ static lv_obj_t *g_progress_bar = NULL;
 static uint8_t *g_thumbnail_data = NULL;
 static int g_thumbnail_len = 0;
 static lv_img_dsc_t g_thumbnail_dsc;
+
+// Pngle decoder context for incremental decoding
+typedef struct {
+    lv_img_dsc_t *img_dsc;
+    lv_color_t *line_buf;  // Single line buffer for RGB565 conversion
+    uint32_t width;
+    uint32_t height;
+    uint32_t current_y;
+    uint8_t *decoded_data;  // RGB565 output buffer
+} pngle_decode_ctx_t;
+
+static pngle_decode_ctx_t g_pngle_ctx = {0};
 
 // Media state
 static media_state_t g_media_state = {
@@ -46,6 +59,77 @@ static void next_event_cb(lv_event_t *e);
 static void update_ui(void);
 static void format_time(char *buf, uint32_t seconds);
 static void progress_timer_cb(TimerHandle_t timer);
+
+// Pngle callback for PNG initialization
+static void pngle_on_init(pngle_t *pngle, uint32_t w, uint32_t h)
+{
+    pngle_decode_ctx_t *ctx = (pngle_decode_ctx_t *)pngle_get_user_data(pngle);
+    
+    ESP_LOGI(TAG, "PNG init: %" PRIu32 "x%" PRIu32, w, h);
+    ctx->width = w;
+    ctx->height = h;
+    ctx->current_y = 0;
+    
+    // Allocate output buffer for RGB565 data (2 bytes per pixel)
+    size_t img_size = w * h * sizeof(lv_color_t);
+    ctx->decoded_data = heap_caps_malloc(img_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (ctx->decoded_data == NULL) {
+        ctx->decoded_data = malloc(img_size);
+    }
+    
+    if (ctx->decoded_data == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate %zu bytes for decoded image", img_size);
+        return;
+    }
+    
+    ESP_LOGI(TAG, "Allocated %zu bytes for decoded image", img_size);
+    
+    // Allocate line buffer for RGB conversion (RGBA input)
+    ctx->line_buf = malloc(w * sizeof(lv_color_t));
+    if (ctx->line_buf == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate line buffer");
+        free(ctx->decoded_data);
+        ctx->decoded_data = NULL;
+        return;
+    }
+}
+
+// Pngle callback for each decoded pixel
+static void pngle_on_draw(pngle_t *pngle, uint32_t x, uint32_t y, uint32_t w, uint32_t h, const uint8_t rgba[4])
+{
+    pngle_decode_ctx_t *ctx = (pngle_decode_ctx_t *)pngle_get_user_data(pngle);
+    
+    if (ctx->decoded_data == NULL || ctx->line_buf == NULL) {
+        return;
+    }
+    
+    // Convert RGBA8888 to RGB565 and store in output buffer
+    lv_color_t *pixel = (lv_color_t *)(ctx->decoded_data + (y * ctx->width + x) * sizeof(lv_color_t));
+    
+    // Convert RGBA to RGB565 (LVGL color format)
+    // Note: LVGL RGB565 format has different layouts on different platforms
+    #if LV_COLOR_DEPTH == 16 && LV_COLOR_16_SWAP == 0
+        pixel->full = ((rgba[0] & 0xF8) << 8) | ((rgba[1] & 0xFC) << 3) | (rgba[2] >> 3);
+    #else
+        pixel->ch.red = rgba[0] >> 3;      // 8-bit to 5-bit
+        pixel->ch.green_h = rgba[1] >> 2;    // 8-bit to 6-bit  
+        pixel->ch.blue = rgba[2] >> 3;     // 8-bit to 5-bit
+    #endif
+    // Alpha channel (rgba[3]) is ignored for now
+}
+
+// Pngle callback when decoding is done
+static void pngle_on_done(pngle_t *pngle)
+{
+    pngle_decode_ctx_t *ctx = (pngle_decode_ctx_t *)pngle_get_user_data(pngle);
+    ESP_LOGI(TAG, "PNG decode complete: %" PRIu32 "x%" PRIu32, ctx->width, ctx->height);
+    
+    // Free line buffer, we don't need it anymore
+    if (ctx->line_buf) {
+        free(ctx->line_buf);
+        ctx->line_buf = NULL;
+    }
+}
 
 lv_obj_t *ui_media_create(void)
 {
@@ -275,64 +359,71 @@ void ui_media_update_thumbnail(const uint8_t *data, int data_len)
     // Check available heap before decoding
     size_t free_heap = esp_get_free_heap_size();
     size_t min_free_heap = esp_get_minimum_free_heap_size();
-    ESP_LOGI(TAG, "Updating thumbnail: %d bytes (free heap: %zu, min: %zu)", 
-             data_len, free_heap, min_free_heap);
-    
-    // PNG decoding requires a lot of RAM (width×height×4 bytes for RGBA)
-    // If we don't have enough free heap, skip thumbnail to prevent crashes
-    if (free_heap < 400000) {  // Need ~360KB+ for typical album art decode
-        ESP_LOGW(TAG, "Insufficient heap for PNG decode (need ~400KB, have %zu bytes)", free_heap);
-        ESP_LOGW(TAG, "Skipping thumbnail display. Consider using JPEG or smaller images.");
-        return;
-    }
+    ESP_LOGI(TAG, "Updating thumbnail: %d bytes (free heap: %" PRIu32 ", min: %" PRIu32 ")", 
+             data_len, (uint32_t)free_heap, (uint32_t)min_free_heap);
     
     // Debug: Check first few bytes to verify image format
     if (data_len >= 4) {
         ESP_LOGI(TAG, "Thumbnail header: %02X %02X %02X %02X", 
                  data[0], data[1], data[2], data[3]);
         
-        // Detect format
+        // Detect format - pngle only supports PNG
         if (data[0] == 0xFF && data[1] == 0xD8) {
-            ESP_LOGI(TAG, "Detected JPEG format");
-        } else if (data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47) {
-            ESP_LOGI(TAG, "Detected PNG format");
-        } else {
-            ESP_LOGW(TAG, "Unknown image format");
+            ESP_LOGW(TAG, "JPEG format detected, but pngle only supports PNG");
+            ESP_LOGW(TAG, "Please configure Home Assistant to send PNG thumbnails");
+            return;
+        } else if (data[0] != 0x89 || data[1] != 0x50 || data[2] != 0x4E || data[3] != 0x47) {
+            ESP_LOGW(TAG, "Unknown image format (not PNG)");
+            return;
         }
+        ESP_LOGI(TAG, "Detected PNG format - decoding with pngle");
     }
     
-    // Copy data to our persistent buffer (if not already there)
-    if (data != g_thumbnail_data) {
-        memcpy(g_thumbnail_data, data, data_len);
+    // Initialize pngle decoder
+    ESP_LOGI(TAG, "Creating pngle decoder (free heap: %" PRIu32 " bytes)...", (uint32_t)esp_get_free_heap_size());
+    pngle_t *pngle = pngle_new();
+    if (pngle == NULL) {
+        ESP_LOGE(TAG, "Failed to create pngle decoder (out of memory)");
+        ESP_LOGE(TAG, "Free heap: %" PRIu32 " bytes", (uint32_t)esp_get_free_heap_size());
+        return;
     }
-    g_thumbnail_len = data_len;
+    ESP_LOGI(TAG, "pngle decoder created successfully");
     
-    // Setup image descriptor for decoder
-    // The esp_lv_decoder supports both JPEG and PNG
-    // For PNG: use LV_IMG_CF_TRUE_COLOR_ALPHA
-    // For JPEG: use LV_IMG_CF_TRUE_COLOR
+    // Set up context and callbacks
+    memset(&g_pngle_ctx, 0, sizeof(g_pngle_ctx));
+    g_pngle_ctx.img_dsc = &g_thumbnail_dsc;
+    pngle_set_user_data(pngle, &g_pngle_ctx);
+    pngle_set_init_callback(pngle, pngle_on_init);
+    pngle_set_draw_callback(pngle, pngle_on_draw);
+    pngle_set_done_callback(pngle, pngle_on_done);
+    
+    // Feed PNG data to pngle incrementally
+    ESP_LOGI(TAG, "Feeding %d bytes to pngle decoder...", data_len);
+    int fed = pngle_feed(pngle, data, data_len);
+    
+    if (fed < 0) {
+        ESP_LOGE(TAG, "pngle_feed failed: %d (%s)", fed, pngle_error(pngle));
+        pngle_destroy(pngle);
+        if (g_pngle_ctx.decoded_data) {
+            free(g_pngle_ctx.decoded_data);
+            g_pngle_ctx.decoded_data = NULL;
+        }
+        return;
+    }
+    
+    ESP_LOGI(TAG, "PNG decoded successfully: %" PRIu32 "x%" PRIu32 ", consumed %d bytes", 
+             (uint32_t)g_pngle_ctx.width, (uint32_t)g_pngle_ctx.height, fed);
+    
+    // Setup LVGL image descriptor with decoded RGB565 data
     g_thumbnail_dsc.header.always_zero = 0;
-    g_thumbnail_dsc.header.w = 0;  // Will be auto-detected by decoder
-    g_thumbnail_dsc.header.h = 0;  // Will be auto-detected by decoder
-    
-    // Set color format based on detected image type
-    if (data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47) {
-        // PNG format
-        g_thumbnail_dsc.header.cf = LV_IMG_CF_TRUE_COLOR_ALPHA;
-    } else if (data[0] == 0xFF && data[1] == 0xD8) {
-        // JPEG format
-        g_thumbnail_dsc.header.cf = LV_IMG_CF_TRUE_COLOR;
-    } else {
-        // Unknown - default to TRUE_COLOR
-        g_thumbnail_dsc.header.cf = LV_IMG_CF_TRUE_COLOR;
-    }
-    
-    g_thumbnail_dsc.data_size = data_len;
-    g_thumbnail_dsc.data = g_thumbnail_data;
+    g_thumbnail_dsc.header.w = g_pngle_ctx.width;
+    g_thumbnail_dsc.header.h = g_pngle_ctx.height;
+    g_thumbnail_dsc.header.cf = LV_IMG_CF_TRUE_COLOR;  // RGB565
+    g_thumbnail_dsc.data_size = g_pngle_ctx.width * g_pngle_ctx.height * sizeof(lv_color_t);
+    g_thumbnail_dsc.data = g_pngle_ctx.decoded_data;
     
     // Update the background image
     if (lvgl_lock(100)) {
-        // Set the image source (LVGL 8 returns void, decoder errors will be logged separately)
         lv_img_set_src(g_bg_img, &g_thumbnail_dsc);
         
         // Make image visible and configure appearance
@@ -341,8 +432,14 @@ void ui_media_update_thumbnail(const uint8_t *data, int data_len)
         lv_obj_set_style_img_opa(g_bg_img, LV_OPA_40, LV_PART_MAIN);
         
         lvgl_unlock();
-        ESP_LOGI(TAG, "Thumbnail displayed");
+        ESP_LOGI(TAG, "Thumbnail displayed on screen");
     } else {
         ESP_LOGW(TAG, "Failed to acquire LVGL lock for thumbnail update");
     }
+    
+    // Clean up pngle decoder
+    pngle_destroy(pngle);
+    
+    // Check heap after decode
+    ESP_LOGI(TAG, "Free heap after decode: %" PRIu32 " bytes", (uint32_t)esp_get_free_heap_size());
 }

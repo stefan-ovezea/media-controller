@@ -3,5 +3,3 @@ dependencies:
   espressif/esp_lcd_sh8601: "^1.0.0"
   espressif/mqtt: "*"
   espressif/esp_lv_decoder: "*"
-  pngle:
-    git: https://github.com/kikuchan/pngle.git
