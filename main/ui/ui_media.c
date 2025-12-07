@@ -394,15 +394,13 @@ void ui_media_update_thumbnail(const uint8_t *data, int data_len)
         // Set the image source - LVGL will decode it automatically!
         lv_img_set_src(g_bg_img, &g_thumbnail_dsc);
 
-        // Position image on the RIGHT side of screen, filling the height
-        // Your screen is 320x170 (landscape), so make image fill the right side
-        lv_obj_set_size(g_bg_img, LCD_V_RES, LCD_V_RES);  // 170x170 square on right
+        // DO NOT set size - let image use its natural decoded size to avoid tiling
+        // Just position it on the right side
         lv_obj_align(g_bg_img, LV_ALIGN_RIGHT_MID, 0, 0);
         lv_obj_clear_flag(g_bg_img, LV_OBJ_FLAG_SCROLLABLE);
 
-        // Enable image scaling to fill the area
-        lv_obj_set_style_transform_pivot_x(g_bg_img, LCD_V_RES / 2, LV_PART_MAIN);
-        lv_obj_set_style_transform_pivot_y(g_bg_img, LCD_V_RES / 2, LV_PART_MAIN);
+        // Set image recolor mode to NONE (disables tiling effect)
+        lv_img_set_size_mode(g_bg_img, LV_IMG_SIZE_MODE_REAL);
 
         // Full opacity for album art (no transparency)
         lv_obj_set_style_img_opa(g_bg_img, LV_OPA_COVER, LV_PART_MAIN);
